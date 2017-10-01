@@ -23,7 +23,7 @@ class PosOrder(models.Model):
 
     @api.model
     def _amount_line_tax(self, line, fiscal_position_id):
-        taxes = line.tax_ids.filtered(lambda t: t.company_id.id == line.order_id.company_id.id)
+        taxes = line.tax_ids.filtered(lambda t: t.accounting_company_id.id == line.order_id.company_id.accounting_company_id.id)
         if fiscal_position_id:
             taxes = fiscal_position_id.map_tax(taxes, line.product_id, line.order_id.partner_id)
         price = line.price_unit * (1 - (line.discount or 0.0) / 100.0)
@@ -185,7 +185,7 @@ class PosOrder(models.Model):
         # Oldlin trick
         invoice_line = InvoiceLine.sudo().new(inv_line)
         invoice_line._onchange_product_id()
-        invoice_line.invoice_line_tax_ids = invoice_line.invoice_line_tax_ids.filtered(lambda t: t.company_id.id == line.order_id.company_id.id).ids
+        invoice_line.invoice_line_tax_ids = invoice_line.invoice_line_tax_ids.filtered(lambda t: t.accounting_company_id.id == line.order_id.company_id.accounting_company_id.id).ids
         fiscal_position_id = line.order_id.fiscal_position_id
         if fiscal_position_id:
             invoice_line.invoice_line_tax_ids = fiscal_position_id.map_tax(invoice_line.invoice_line_tax_ids, line.product_id, line.order_id.partner_id)
@@ -257,7 +257,7 @@ class PosOrder(models.Model):
         for order in self.filtered(lambda o: not o.account_move or o.state == 'paid'):
             current_company = order.sale_journal.company_id
             account_def = IrProperty.get(
-                'property_account_receivable_id', 'res.partner')
+                'property_account_receivable_id', 'res.partner', 'accounting')
             order_account = order.partner_id.property_account_receivable_id.id or account_def and account_def.id
             partner_id = ResPartner._find_accounting_partner(order.partner_id).id or False
             if move is None:
@@ -339,7 +339,7 @@ class PosOrder(models.Model):
                 })
 
                 # Create the tax lines
-                taxes = line.tax_ids_after_fiscal_position.filtered(lambda t: t.company_id.id == current_company.id)
+                taxes = line.tax_ids_after_fiscal_position.filtered(lambda t: t.accounting_company_id.id == current_company.accounting_company_id.id)
                 if not taxes:
                     continue
                 price = line.price_unit * (1 - (line.discount or 0.0) / 100.0)
@@ -778,7 +778,7 @@ class PosOrder(models.Model):
         journal = self.env['account.journal'].browse(journal_id)
         # use the company of the journal and not of the current user
         company_cxt = dict(self.env.context, force_company=journal.company_id.id)
-        account_def = self.env['ir.property'].with_context(company_cxt).get('property_account_receivable_id', 'res.partner')
+        account_def = self.env['ir.property'].with_context(company_cxt).get('property_account_receivable_id', 'res.partner', 'accounting')
         args['account_id'] = (self.partner_id.property_account_receivable_id.id) or (account_def and account_def.id) or False
 
         if not args['account_id']:
@@ -924,7 +924,7 @@ class PosOrderLine(models.Model):
             price = self.order_id.pricelist_id.get_product_price(
                 self.product_id, self.qty or 1.0, self.order_id.partner_id)
             self._onchange_qty()
-            self.tax_ids = self.product_id.taxes_id.filtered(lambda r: not self.company_id or r.company_id == self.company_id)
+            self.tax_ids = self.product_id.taxes_id.filtered(lambda r: not self.company_id or r.accounting_company_id == self.company_id.accounting_company_id)
             fpos = self.order_id.fiscal_position_id
             tax_ids_after_fiscal_position = fpos.map_tax(self.tax_ids, self.product_id, self.order_id.partner_id) if fpos else self.tax_ids
             self.price_unit = self.env['account.tax']._fix_tax_included_price_company(price, self.product_id.taxes_id, tax_ids_after_fiscal_position, self.company_id)
@@ -1028,10 +1028,10 @@ class ReportSaleDetails(models.AbstractModel):
                 SELECT aj.name, sum(amount) total
                 FROM account_bank_statement_line AS absl,
                      account_bank_statement AS abs,
-                     account_journal AS aj 
+                     account_journal AS aj
                 WHERE absl.statement_id = abs.id
-                    AND abs.journal_id = aj.id 
-                    AND absl.id IN %s 
+                    AND abs.journal_id = aj.id
+                    AND absl.id IN %s
                 GROUP BY aj.name
             """, (tuple(st_line_ids),))
             payments = self.env.cr.dictfetchall()

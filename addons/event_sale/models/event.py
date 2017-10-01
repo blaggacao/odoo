@@ -81,7 +81,7 @@ class EventTicket(models.Model):
     def _get_price_reduce_tax(self):
         for record in self:
             # sudo necessary here since the field is most probably accessed through the website
-            tax_ids = record.sudo().product_id.taxes_id.filtered(lambda r: r.company_id == record.event_id.company_id)
+            tax_ids = record.sudo().product_id.taxes_id.filtered(lambda r: r.accounting_company_id == record.event_id.company_id.accounting_company_id)
             taxes = tax_ids.compute_all(record.price_reduce, record.event_id.company_id.currency_id, 1.0, product=record.product_id)
             record.price_reduce_taxinc = taxes['total_included']
 

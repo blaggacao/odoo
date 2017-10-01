@@ -119,26 +119,31 @@ class Property(models.Model):
         return False
 
     @api.model
-    def get(self, name, model, res_id=False):
-        domain = self._get_domain(name, model)
+    def get(self, name, model, mode, res_id=False):
+        domain = self._get_domain(name, model, mode)
         if domain is not None:
             domain = [('res_id', '=', res_id)] + domain
             #make the search with company_id asc to make sure that properties specific to a company are given first
-            prop = self.search(domain, limit=1, order='company_id')
+            # sudo, as we could be on a child company of an accounting company, here
+            prop = self.sudo().search(domain, limit=1, order='company_id')
             if prop:
                 return prop.get_by_record()
         return False
 
-    def _get_domain(self, prop_name, model):
+    def _get_domain(self, prop_name, model, mode):
         self._cr.execute("SELECT id FROM ir_model_fields WHERE name=%s AND model=%s", (prop_name, model))
         res = self._cr.fetchone()
         if not res:
             return None
         company_id = self._context.get('force_company') or self.env['res.company']._company_default_get(model, res[0]).id
-        return [('fields_id', '=', res[0]), ('company_id', 'in', [company_id, False])]
+        company_list = [company_id, False]
+        if mode == 'accounting' and hasattr(self.env['res.company'], '_get_accounting_subsidiaries'):
+            # sudo, as we could be on a child company of an accounting company, here
+            company_list.extend(self.env['res.company'].sudo().browse(company_id)._get_accounting_subsidiaries()._ids)
+        return [('fields_id', '=', res[0]), ('company_id', 'in', company_list)]
 
     @api.model
-    def get_multi(self, name, model, ids):
+    def get_multi(self, name, model, ids, mode):
         """ Read the property field `name` for the records of model `model` with
             the given `ids`, and return a dictionary mapping `ids` to their
             corresponding value.
@@ -146,7 +151,7 @@ class Property(models.Model):
         if not ids:
             return {}
 
-        domain = self._get_domain(name, model)
+        domain = self._get_domain(name, model, mode)
         if domain is None:
             return dict.fromkeys(ids, False)
 
@@ -156,7 +161,8 @@ class Property(models.Model):
         domain += [('res_id', 'in', list(refs))]
 
         # note: order by 'company_id asc' will return non-null values first
-        props = self.search(domain, order='company_id asc')
+        # sudo, as we could be on a child company of an accounting company, here
+        props = self.sudo().search(domain, order='company_id asc')
         result = {}
         for prop in props:
             # for a given res_id, take the first property only
@@ -172,7 +178,7 @@ class Property(models.Model):
         return result
 
     @api.model
-    def set_multi(self, name, model, values, default_value=None):
+    def set_multi(self, name, model, values, mode, default_value=None):
         """ Assign the property field `name` for the records of model `model`
             with `values` (dictionary mapping record ids to their value).
             If the value for a given record is the same as the default
@@ -189,18 +195,21 @@ class Property(models.Model):
             return
 
         if not default_value:
-            domain = self._get_domain(name, model)
+            domain = self._get_domain(name, model, mode)
             if domain is None:
                 raise Exception()
             # retrieve the default value for the field
-            default_value = clean(self.get(name, model))
+            default_value = clean(self.get(name, model, mode))
 
         # retrieve the properties corresponding to the given record ids
         self._cr.execute("SELECT id FROM ir_model_fields WHERE name=%s AND model=%s", (name, model))
         field_id = self._cr.fetchone()[0]
         company_id = self.env.context.get('force_company') or self.env['res.company']._company_default_get(model, field_id).id
+        if mode == 'accounting' and hasattr(self.env['res.company'], 'accounting_company_id'):
+            company_id = self.env['res.company'].browse(company_id).accounting_company_id.id or company_id
         refs = {('%s,%s' % (model, id)): id for id in values}
-        props = self.search([
+        # sudo, as we could be on a child company of an accounting company, here
+        props = self.sudo().search([
             ('fields_id', '=', field_id),
             ('company_id', '=', company_id),
             ('res_id', 'in', list(refs)),
@@ -219,7 +228,7 @@ class Property(models.Model):
         for ref, id in refs.iteritems():
             value = clean(values[id])
             if value != default_value:
-                self.create({
+                self.sudo().create({
                     'fields_id': field_id,
                     'company_id': company_id,
                     'res_id': ref,
@@ -229,7 +238,7 @@ class Property(models.Model):
                 })
 
     @api.model
-    def search_multi(self, name, model, operator, value):
+    def search_multi(self, name, model, operator, value, mode):
         """ Return a domain for the records that match the given condition. """
         default_matches = False
         include_zero = False
@@ -277,10 +286,11 @@ class Property(models.Model):
 
 
         # retrieve the properties that match the condition
-        domain = self._get_domain(name, model)
+        domain = self._get_domain(name, model, mode)
         if domain is None:
             raise Exception()
-        props = self.search(domain + [(TYPE2FIELD[field.type], operator, value)])
+        # sudo, as we could be on a child company of an accounting company, here
+        props = self.sudo().search(domain + [(TYPE2FIELD[field.type], operator, value)])
 
         # retrieve the records corresponding to the properties that match
         good_ids = []
@@ -296,7 +306,8 @@ class Property(models.Model):
         elif default_matches:
             # exclude all records with a property that does not match
             all_ids = []
-            props = self.search(domain + [('res_id', '!=', False)])
+            # sudo, as we could be on a child company of an accounting company, here
+            props = self.sudo().search(domain + [('res_id', '!=', False)])
             for prop in props:
                 res_model, res_id = prop.res_id.split(',')
                 all_ids.append(int(res_id))

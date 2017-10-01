@@ -77,7 +77,7 @@ class SaleOrder(models.Model):
         SaleOrderLine = self.env['sale.order.line']
 
         # Apply fiscal position
-        taxes = carrier.product_id.taxes_id.filtered(lambda t: t.company_id.id == self.company_id.id)
+        taxes = carrier.product_id.taxes_id.filtered(lambda t: t.accounting_company_id == self.company_id.accounting_company_id)
         taxes_ids = taxes.ids
         if self.partner_id and self.fiscal_position_id:
             taxes_ids = self.fiscal_position_id.map_tax(taxes, carrier.product_id, self.partner_id).ids

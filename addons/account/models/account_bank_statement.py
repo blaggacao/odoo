@@ -137,6 +137,7 @@ class AccountBankStatement(models.Model):
     currency_id = fields.Many2one('res.currency', compute='_compute_currency', oldname='currency', string="Currency")
     journal_id = fields.Many2one('account.journal', string='Journal', required=True, states={'confirm': [('readonly', True)]}, default=_default_journal)
     journal_type = fields.Selection(related='journal_id.type', help="Technical field used for usability purposes")
+    accounting_company_id = fields.Many2one('res.company', related='company_id.accounting_company_id', store=True)
     company_id = fields.Many2one('res.company', related='journal_id.company_id', string='Company', store=True, readonly=True,
         default=lambda self: self.env['res.company']._company_default_get('account.bank.statement'))
 
@@ -284,12 +285,16 @@ class AccountBankStatement(models.Model):
         # NB : The field account_id can be used at the statement line creation/import to avoid the reconciliation process on it later on,
         # this is why we filter out statements lines where account_id is set
 
-        sql_query = """SELECT stl.id 
-                        FROM account_bank_statement_line stl  
+        sql_query = """SELECT stl.id
+                        FROM account_bank_statement_line stl
                         WHERE account_id IS NULL AND not exists (select 1 from account_move m where m.statement_line_id = stl.id)
-                            AND company_id = %s
+                            AND company_id IN %s
                 """
-        params = (self.env.user.company_id.id,)
+        child_companies = set(
+            self.env.user.company_id._get_accounting_subsidiaries().ids
+            ) & set(
+            self.env.user.company_id._get_company_children(self.env.user.company_id.id))
+        params = (tuple(child_companies),)
         if statements:
             sql_query += ' AND stl.statement_id IN %s'
             params += (tuple(statements.ids),)
@@ -308,16 +313,16 @@ class AccountBankStatement(models.Model):
                             FROM account_move_line aml
                                 JOIN account_account acc ON acc.id = aml.account_id
                                 JOIN account_bank_statement_line stl ON aml.ref = stl.name
-                            WHERE (aml.company_id = %s 
-                                AND aml.partner_id IS NOT NULL) 
+                            WHERE (aml.company_id IN %s
+                                AND aml.partner_id IS NOT NULL)
                                 AND (
-                                    (aml.statement_id IS NULL AND aml.account_id IN %s) 
-                                    OR 
+                                    (aml.statement_id IS NULL AND aml.account_id IN %s)
+                                    OR
                                     (acc.internal_type IN ('payable', 'receivable') AND aml.reconciled = false)
                                     )
                                 AND aml.ref IN %s
                                 """
-            params = (self.env.user.company_id.id, (st_lines_left[0].journal_id.default_credit_account_id.id, st_lines_left[0].journal_id.default_debit_account_id.id), tuple(refs))
+            params = (tuple(child_companies), (st_lines_left[0].journal_id.default_credit_account_id.id, st_lines_left[0].journal_id.default_debit_account_id.id), tuple(refs))
             if statements:
                 sql_query += 'AND stl.id IN %s'
                 params += (tuple(stl_to_assign_partner),)
@@ -365,6 +370,7 @@ class AccountBankStatementLine(models.Model):
     ref = fields.Char(string='Reference')
     note = fields.Text(string='Notes')
     sequence = fields.Integer(index=True, help="Gives the sequence order when displaying a list of bank statement lines.", default=1)
+    accounting_company_id = fields.Many2one('res.company', related='company_id.accounting_company_id', store=True)
     company_id = fields.Many2one('res.company', related='statement_id.company_id', string='Company', store=True, readonly=True)
     journal_entry_ids = fields.One2many('account.move', 'statement_line_id', 'Journal Entries', copy=False, readonly=True)
     amount_currency = fields.Monetary(help="The amount expressed in an optional other currency if it is a multi-currency entry.")
@@ -603,7 +609,7 @@ class AccountBankStatementLine(models.Model):
         account_clause = ''
         if self.journal_id.default_credit_account_id and self.journal_id.default_debit_account_id:
             account_clause = "(aml.statement_id IS NULL AND aml.account_id IN %(account_payable_receivable)s AND aml.payment_id IS NOT NULL) OR"
-        where_clause = """WHERE aml.company_id = %(company_id)s
+        where_clause = """WHERE aml.company_id IN %(company_ids)s
                           AND (
                                     """ + account_clause + """
                                     ("""+acc_type+""" AND aml.reconciled = false)
@@ -626,7 +632,11 @@ class AccountBankStatementLine(models.Model):
         st_line_currency = self.currency_id or self.journal_id.currency_id
         currency = (st_line_currency and st_line_currency != company_currency) and st_line_currency.id or False
         precision = st_line_currency and st_line_currency.decimal_places or company_currency.decimal_places
-        params = {'company_id': self.env.user.company_id.id,
+        child_companies = set(
+            self.env.user.company_id._get_accounting_subsidiaries().ids
+            ) & set(
+            self.env.user.company_id._get_company_children(self.env.user.company_id.id))
+        params = {'company_ids': tuple(child_companies),
                     'account_payable_receivable': (self.journal_id.default_credit_account_id.id, self.journal_id.default_debit_account_id.id),
                     'amount': float_repr(float_round(amount, precision_digits=precision), precision_digits=precision),
                     'partner_id': self.partner_id.id,
@@ -677,7 +687,11 @@ class AccountBankStatementLine(models.Model):
         st_line_currency = self.currency_id or self.journal_id.currency_id
         currency = (st_line_currency and st_line_currency != company_currency) and st_line_currency.id or False
         precision = st_line_currency and st_line_currency.decimal_places or company_currency.decimal_places
-        params = {'company_id': self.env.user.company_id.id,
+        child_companies = set(
+            self.env.user.company_id._get_accounting_subsidiaries().ids
+            ) & set(
+            self.env.user.company_id._get_company_children(self.env.user.company_id.id))
+        params = {'company_ids': tuple(child_companies),
                     'account_payable_receivable': (self.journal_id.default_credit_account_id.id, self.journal_id.default_debit_account_id.id),
                     'amount': float_round(amount, precision_digits=precision),
                     'partner_id': self.partner_id.id,
@@ -786,7 +800,7 @@ class AccountBankStatementLine(models.Model):
             # company in currency A, statement in currency B and transaction in currency A
             # counterpart line must have currency B and amount is computed using the rate between A and B
             amount_currency = amount/st_line_currency_rate
-        
+
         # last case is company in currency A, statement in currency A and transaction in currency A
         # and in this case counterpart line does not need any second currency nor amount_currency
 

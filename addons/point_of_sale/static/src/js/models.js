@@ -153,7 +153,7 @@ exports.PosModel = Backbone.Model.extend({
         loaded: function(self,users){ self.user = users[0]; },
     },{ 
         model:  'res.company',
-        fields: [ 'currency_id', 'email', 'website', 'company_registry', 'vat', 'name', 'phone', 'partner_id' , 'country_id', 'tax_calculation_rounding_method'],
+        fields: [ 'currency_id', 'email', 'website', 'company_registry', 'vat', 'name', 'phone', 'partner_id' , 'country_id', 'tax_calculation_rounding_method', 'accounting_company_id'],
         ids:    function(self){ return [self.user.company_id[0]]; },
         loaded: function(self,companies){ self.company = companies[0]; },
     },{
@@ -203,7 +203,7 @@ exports.PosModel = Backbone.Model.extend({
     },{
         model:  'account.tax',
         fields: ['name','amount', 'price_include', 'include_base_amount', 'amount_type', 'children_tax_ids', 'sequence'],
-        domain: function(self) {return [['company_id', '=', self.company && self.company.id || false]]},
+        domain: function(self) {return [['company_id', '=', self.company && self.company.accounting_company_id[0] || false]]},
         loaded: function(self, taxes){
             self.taxes = taxes;
             self.taxes_by_id = {};
