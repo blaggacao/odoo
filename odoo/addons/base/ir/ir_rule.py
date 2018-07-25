@@ -71,7 +71,6 @@ class IrRule(models.Model):
             raise ValidationError(_('Rules can not be applied on the Record Rules model.'))
 
     @api.model
-    @tools.ormcache('self._uid', 'model_name', 'mode')
     def _compute_domain(self, model_name, mode="read"):
         if mode not in self._MODES:
             raise ValueError('Invalid mode: %r' % (mode,))
@@ -120,6 +119,7 @@ class IrRule(models.Model):
         self.clear_caches()
 
     @api.model
+    @tools.ormcache('self.id', 'self._uid', 'model_name', 'mode')
     def domain_get(self, model_name, mode='read'):
         dom = self._compute_domain(model_name, mode)
         if dom:

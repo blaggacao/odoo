@@ -35,15 +35,15 @@ class ormcache(object):
     The parameters are strings that represent expressions referring to the
     signature of the decorated method, and are used to compute a cache key::
 
-        @ormcache('model_name', 'mode')
-        def _compute_domain(self, model_name, mode="read"):
+        @ormcache('self.id', 'self._uid', 'model_name', 'mode')
+        def domain_get(self, model_name, mode='read'):
             ...
 
     For the sake of backward compatibility, the decorator supports the named
     parameter `skiparg`::
 
         @ormcache(skiparg=1)
-        def _compute_domain(self, model_name, mode="read"):
+        def domain_get(self, model_name, mode='read'):
             ...
     """
     def __init__(self, *args, **kwargs):
